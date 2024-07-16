@@ -1,46 +1,50 @@
-use std::io::{self, Result};
+use std::io::{self, stdout, Result, Stdout};
+use std::process::ExitCode;
 
 use std::env::{self, args, set_current_dir};
-use std::fs::{self, read_dir, DirEntry, FileType, ReadDir};
-use std::os::unix::fs::FileTypeExt;
-use std::path::{Path, PathBuf};
+use std::fs::{read_dir, DirEntry}; // , FileType};
+use std::path::PathBuf;
+use std::str::FromStr;
 
 use ratatui::{
+    backend::CrosstermBackend,
     buffer::Buffer,
-    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::Stylize,
-    symbols::border,
-    text::{Line, Text},
-    widgets::{
-        block::{Position, Title},
-        Block, List, ListDirection, Paragraph, Widget,
+    crossterm::{
+        event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     },
-    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    widgets::{List, ListDirection, ListState, Paragraph, StatefulWidget, Widget},
+    Frame, Terminal,
 };
 
-mod tui;
-
-fn main() -> Result<()> {
-    let mut terminal = tui::init()?;
-
+fn main() -> Result<ExitCode> {
     match args().len() {
         1 => (),
-        2 => set_current_dir(args().skip(1).next().unwrap())?,
+        2 => {
+            let arg1 = args().skip(1).next().unwrap();
+            if arg1 != "" {
+                set_current_dir(arg1)?;
+            }
+        }
         _ => {
             println!("too many arguments");
-            return Ok(());
+            return Ok(ExitCode::from(1));
         }
     }
+
+    execute!(stdout(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut app = App::new(
         CurrentDir {
             value: env::current_dir()?,
         },
         Content {
-            value: read_dir(env::current_dir().unwrap())
-                .unwrap()
-                .collect::<Result<Vec<DirEntry>>>()
-                .unwrap(),
+            value: read_dir(env::current_dir()?)?.collect::<Result<Vec<DirEntry>>>()?,
+            state: ListState::default(),
         },
         Status {
             value: "status".to_string(),
@@ -49,11 +53,18 @@ fn main() -> Result<()> {
             value: ":command".to_string(),
         },
         false,
+        PathBuf::new(),
     );
 
     let app_result = app.run(&mut terminal);
-    tui::restore()?;
-    app_result
+
+    execute!(stdout(), LeaveAlternateScreen)?;
+    disable_raw_mode()?;
+
+    app_result?;
+    print!("{}", app.exit_path.to_str().unwrap());
+
+    Ok(ExitCode::from(0))
 }
 
 pub struct App {
@@ -62,6 +73,7 @@ pub struct App {
     status: Status,
     command: Command,
     exit: bool,
+    exit_path: PathBuf,
 }
 
 impl App {
@@ -71,6 +83,7 @@ impl App {
         status: Status,
         command: Command,
         exit: bool,
+        exit_path: PathBuf,
     ) -> App {
         App {
             current_dir,
@@ -78,10 +91,13 @@ impl App {
             status,
             command,
             exit,
+            exit_path,
         }
     }
 
-    pub fn run(&mut self, terminal: &mut tui::Tui) -> io::Result<()> {
+    pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
+        self.content.state.select_first();
+
         while !self.exit {
             terminal.draw(|frame| self.render_frame(frame))?;
             self.handle_events()?;
@@ -89,7 +105,7 @@ impl App {
         Ok(())
     }
 
-    fn render_frame(&self, frame: &mut Frame) {
+    fn render_frame(&mut self, frame: &mut Frame) {
         let areas = Layout::new(
             Direction::Vertical,
             [
@@ -102,7 +118,7 @@ impl App {
         .split(frame.size());
 
         frame.render_widget(&self.current_dir, areas[0]);
-        frame.render_widget(&self.content, areas[1]);
+        frame.render_widget(&mut self.content, areas[1]);
         frame.render_widget(&self.status, areas[2]);
         frame.render_widget(&self.command, areas[3]);
     }
@@ -119,24 +135,38 @@ impl App {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
-            KeyCode::Char('q') => self.exit(),
-            KeyCode::Char('.') => self.change_dir(),
-            _ => {}
+            KeyCode::Char('w') => {
+                self.exit_path = self.current_dir.value.clone();
+                self.exit();
+            }
+            KeyCode::Char('q') => {
+                self.exit_path = PathBuf::from_str(".").unwrap();
+                self.exit();
+            }
+            KeyCode::Char('j') | KeyCode::Down => self.content.down(),
+            KeyCode::Char('k') | KeyCode::Up => self.content.up(),
+            KeyCode::Enter => {
+                self.content.enter();
+                self.current_dir.update();
+                self.content.update();
+            }
+            _ => (),
         }
     }
 
     fn exit(&mut self) {
         self.exit = true;
     }
-
-    fn change_dir(&mut self) {
-        set_current_dir("..").unwrap();
-        self.current_dir.value = env::current_dir().unwrap();
-    }
 }
 
 pub struct CurrentDir {
     value: PathBuf,
+}
+
+impl CurrentDir {
+    fn update(&mut self) {
+        self.value = env::current_dir().unwrap();
+    }
 }
 
 impl Widget for &CurrentDir {
@@ -147,24 +177,90 @@ impl Widget for &CurrentDir {
 
 pub struct Content {
     value: Vec<DirEntry>,
+    state: ListState,
 }
 
-impl Widget for &Content {
+impl Content {
+    fn update(&mut self) {
+        self.value = read_dir(env::current_dir().unwrap())
+            .unwrap()
+            .collect::<Result<Vec<DirEntry>>>()
+            .unwrap();
+    }
+    fn up(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    0
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.state.select(Some(i));
+        self.update();
+    }
+    fn down(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i >= self.value.len() + 1 {
+                    i
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.state.select(Some(i));
+        self.update();
+    }
+    fn enter(&mut self) {
+        match self.state.selected() {
+            Some(i) => match i {
+                0 => {
+                    let _ = set_current_dir("..");
+                    self.state.select_first();
+                }
+                1 => (),
+                _ => {
+                    let _ = set_current_dir(self.value[i - 2].path());
+                    self.state.select_first();
+                }
+            },
+            None => (),
+        }
+    }
+}
+
+impl Widget for &mut Content {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        /*
-        List::new(
-            self.value
-                .into_iter()
-                .map(|a| a.file_name().into_string().unwrap()),
-        )
-        */
-        List::new((1..10).map(|a| a.to_string()))
+        StatefulWidget::render(
+            List::new(
+                [
+                    vec!["../".to_string(), "./".to_string()],
+                    self.value
+                        .iter()
+                        .map(|a| {
+                            if a.file_type().unwrap().is_dir() {
+                                a.file_name().into_string().unwrap() + "/"
+                            } else {
+                                a.file_name().into_string().unwrap()
+                            }
+                        })
+                        .collect::<Vec<String>>(),
+                ]
+                .concat(),
+            )
+            .highlight_symbol(">>")
+            .direction(ListDirection::TopToBottom),
             //.style(Style::default().fg(Color::White))
             // .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-            // .highlight_symbol(">>")
             // .repeat_highlight_symbol(true)
-            .direction(ListDirection::TopToBottom)
-            .render(area, buf);
+            area,
+            buf,
+            &mut self.state,
+        );
     }
 }
 
@@ -188,6 +284,7 @@ impl Widget for &Command {
     }
 }
 
+/*
 enum EntryType {
     Dir,
     File,
@@ -218,3 +315,4 @@ fn what_entry_type(file_type: &FileType) -> EntryType {
         EntryType::None
     }
 }
+*/
