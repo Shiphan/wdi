@@ -62,9 +62,9 @@ add this to your powershell profile
 (you can find it by running `echo $profile`, and if this file doesn't exist, you can create it)
 ```ps1
 function wdi {
-	param ( [String]$arg )
-	$dir = wtdwi $arg
-	if ($?) { cd $dir }
+    param ( [String]$arg )
+    $dir = wtdwi $arg
+    if ($?) { cd $dir }
 }
 ```
 
