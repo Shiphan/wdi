@@ -1,5 +1,12 @@
 # Walk through Directory with Interface
 
+***wdi** is a TUI tool for you to walk through directory with interface.*  
+
+If you are familiar with terminal, then using `cd` to get to where you want will be pretty simple. (and there's some tool to make this even faster)  
+but for those people who are used to GUI or IDE, or you don't know what's inside this directory, then many `ls` and `cd` are required now, and **wdi** was born for these two situations.
+
+- **NOTE:** This project is still in a very early stage, read the [**Current Stage**](#current-stage) part for more information.
+
 ## Usage
 - `k` | `Up` - go up
 - `j` | `Down` - go down
@@ -11,7 +18,7 @@
 
 ### Rust
 
-To use wdi, first make sure you have **rustc** and **cargo** installed, you can run these two commands to verify if ther are installed:
+To use wdi, first make sure you have **rustc** and **cargo** installed, you can run these two commands to verify if they are installed:
 ```shell
 rustc --version
 cargo --version
@@ -72,3 +79,12 @@ If the profile cannot be loaded by powershell, you can run this command:
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 ```
+
+## Current Stage
+
+1. Missing some features that should be available:
+    - search
+    - better ui
+2. Nice to have:
+    - support for mouse
+    - custom style
