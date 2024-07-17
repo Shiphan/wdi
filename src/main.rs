@@ -1,4 +1,4 @@
-use std::io::{self, stdout, Result, Stdout};
+use std::io::{self, stderr, Result, Stderr};
 use std::process::ExitCode;
 
 use std::env::{self, args, set_current_dir};
@@ -34,10 +34,10 @@ fn main() -> Result<ExitCode> {
         }
     }
 
-    execute!(stdout(), EnterAlternateScreen)?;
+    execute!(stderr(), EnterAlternateScreen)?;
     enable_raw_mode()?;
 
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stderr()))?;
     let mut app = App::new(
         CurrentDir {
             value: env::current_dir()?,
@@ -58,7 +58,7 @@ fn main() -> Result<ExitCode> {
 
     let app_result = app.run(&mut terminal);
 
-    execute!(stdout(), LeaveAlternateScreen)?;
+    execute!(stderr(), LeaveAlternateScreen)?;
     disable_raw_mode()?;
 
     app_result?;
@@ -95,7 +95,7 @@ impl App {
         }
     }
 
-    pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
+    pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stderr>>) -> io::Result<()> {
         self.content.state.select_first();
 
         while !self.exit {
