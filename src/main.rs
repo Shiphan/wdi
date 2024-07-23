@@ -1,8 +1,9 @@
+use core::fmt;
 use std::io::{self, stderr, Result, Stderr};
 use std::process::ExitCode;
 
 use std::env::{self, args, set_current_dir};
-use std::fs::{read_dir, DirEntry}; // , FileType};
+use std::fs::{read_dir, DirEntry};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -14,7 +15,8 @@ use ratatui::{
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     },
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Style},
     widgets::{List, ListDirection, ListState, Paragraph, StatefulWidget, Widget},
     Frame, Terminal,
 };
@@ -23,9 +25,9 @@ fn main() -> Result<ExitCode> {
     match args().len() {
         1 => (),
         2 => {
-            let arg1 = args().skip(1).next().unwrap();
+            let arg1 = args().skip(1).next().unwrap_or("".to_string());
             if arg1 != "" {
-                set_current_dir(arg1)?;
+                let _ = set_current_dir(arg1);
             }
         }
         _ => {
@@ -39,18 +41,16 @@ fn main() -> Result<ExitCode> {
 
     let mut terminal = Terminal::new(CrosstermBackend::new(stderr()))?;
     let mut app = App::new(
-        CurrentDir {
-            value: env::current_dir()?,
-        },
         Content {
             value: read_dir(env::current_dir()?)?.collect::<Result<Vec<DirEntry>>>()?,
             state: ListState::default(),
         },
         Status {
-            value: "status".to_string(),
+            mode: Mode::Normal,
+            current_dir: env::current_dir()?,
         },
         Command {
-            value: ":command".to_string(),
+            value: "".to_string(),
         },
         false,
         PathBuf::new(),
@@ -68,7 +68,6 @@ fn main() -> Result<ExitCode> {
 }
 
 pub struct App {
-    current_dir: CurrentDir,
     content: Content,
     status: Status,
     command: Command,
@@ -78,7 +77,6 @@ pub struct App {
 
 impl App {
     pub fn new(
-        current_dir: CurrentDir,
         content: Content,
         status: Status,
         command: Command,
@@ -86,7 +84,6 @@ impl App {
         exit_path: PathBuf,
     ) -> App {
         App {
-            current_dir,
             content,
             status,
             command,
@@ -106,21 +103,16 @@ impl App {
     }
 
     fn render_frame(&mut self, frame: &mut Frame) {
-        let areas = Layout::new(
-            Direction::Vertical,
-            [
-                Constraint::Length(1),
-                Constraint::Fill(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ],
-        )
+        let areas = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(frame.size());
 
-        frame.render_widget(&self.current_dir, areas[0]);
-        frame.render_widget(&mut self.content, areas[1]);
-        frame.render_widget(&self.status, areas[2]);
-        frame.render_widget(&self.command, areas[3]);
+        frame.render_widget(&mut self.content, areas[0]);
+        frame.render_widget(&self.status, areas[1]);
+        frame.render_widget(&self.command, areas[2]);
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
@@ -134,44 +126,31 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('w') => {
-                self.exit_path = self.current_dir.value.clone();
-                self.exit();
-            }
-            KeyCode::Char('q') => {
-                self.exit_path = PathBuf::from_str(".").unwrap();
-                self.exit();
-            }
-            KeyCode::Char('j') | KeyCode::Down => self.content.down(),
-            KeyCode::Char('k') | KeyCode::Up => self.content.up(),
-            KeyCode::Enter => {
-                self.content.enter();
-                self.current_dir.update();
-                self.content.update();
-            }
-            _ => (),
+        match self.status.mode {
+            Mode::Normal => match key_event.code {
+                KeyCode::Char('w') => {
+                    self.exit_path = self.status.current_dir.clone();
+                    self.exit();
+                }
+                KeyCode::Char('q') => {
+                    self.exit_path = PathBuf::from_str(".").unwrap();
+                    self.exit();
+                }
+                KeyCode::Char('j') | KeyCode::Down => self.content.down(),
+                KeyCode::Char('k') | KeyCode::Up => self.content.up(),
+                KeyCode::Enter => {
+                    self.content.enter();
+                    self.status.update_current_dir();
+                    self.content.update();
+                }
+                _ => (),
+            },
+            Mode::Command => self.status.mode = Mode::Normal,
         }
     }
 
     fn exit(&mut self) {
         self.exit = true;
-    }
-}
-
-pub struct CurrentDir {
-    value: PathBuf,
-}
-
-impl CurrentDir {
-    fn update(&mut self) {
-        self.value = env::current_dir().unwrap();
-    }
-}
-
-impl Widget for &CurrentDir {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.value.to_str().unwrap()).render(area, buf);
     }
 }
 
@@ -222,7 +201,7 @@ impl Content {
                     let _ = set_current_dir("..");
                     self.state.select_first();
                 }
-                1 => (),
+                1 => self.update(),
                 _ => {
                     let _ = set_current_dir(self.value[i - 2].path());
                     self.state.select_first();
@@ -264,13 +243,43 @@ impl Widget for &mut Content {
     }
 }
 
+enum Mode {
+    Normal,
+    Command,
+}
+
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Mode::Normal => write!(f, "Normal"),
+            Mode::Command => write!(f, "Command"),
+        }
+    }
+}
+
 pub struct Status {
-    value: String,
+    mode: Mode,
+    current_dir: PathBuf,
+}
+
+impl Status {
+    fn update_current_dir(&mut self) {
+        self.current_dir = env::current_dir().unwrap();
+    }
 }
 
 impl Widget for &Status {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.value.clone()).render(area, buf);
+        let areas = Layout::horizontal([
+            Constraint::Length((self.mode.to_string().len() + 2) as u16),
+            Constraint::Fill(1),
+        ])
+        .split(area);
+
+        Paragraph::new(format!(" {} ", self.mode.to_string()))
+            .style(Style::new().bg(Color::Blue))
+            .render(areas[0], buf);
+        Paragraph::new(self.current_dir.to_str().unwrap()).render(areas[1], buf);
     }
 }
 
