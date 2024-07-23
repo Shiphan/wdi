@@ -142,6 +142,7 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => self.content.up(),
                 KeyCode::Char('/') => {
                     self.status.mode = Mode::Command;
+                    self.content.clear_search();
                     self.command.value = "/".to_string();
                 }
                 KeyCode::Char('n') => self.content.select_next_target(),
@@ -153,7 +154,7 @@ impl App {
                 }
                 KeyCode::Esc => {
                     if self.content.keyword != None {
-                        self.content.clear_targets();
+                        self.content.clear_search();
                         self.command.value = "".to_string();
                     }
                 }
@@ -175,7 +176,7 @@ impl App {
                     self.status.mode = Mode::Normal;
                 }
                 KeyCode::Esc => {
-                    self.content.clear_targets();
+                    self.content.clear_search();
                     self.command.value = "".to_string();
                     self.status.mode = Mode::Normal;
                 }
@@ -251,7 +252,7 @@ impl Content {
             }
         }
     }
-    fn clear_targets(&mut self) {
+    fn clear_search(&mut self) {
         self.targets = vec![];
         self.keyword = None;
     }
@@ -371,3 +372,4 @@ impl Widget for &Command {
         Paragraph::new(self.value.clone()).render(area, buf);
     }
 }
+
