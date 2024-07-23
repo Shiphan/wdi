@@ -1,12 +1,12 @@
 use core::fmt;
-use std::io::{self, stderr, Result, Stderr};
-use std::process::ExitCode;
-
 use std::env::{self, args, set_current_dir};
 use std::fs::{read_dir, DirEntry};
+use std::io::{self, stderr, Result, Stderr};
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::str::FromStr;
 
+use ratatui::text::Text;
 use ratatui::{
     backend::CrosstermBackend,
     buffer::Buffer,
@@ -43,6 +43,8 @@ fn main() -> Result<ExitCode> {
     let mut app = App::new(
         Content {
             value: read_dir(env::current_dir()?)?.collect::<Result<Vec<DirEntry>>>()?,
+            keyword: None,
+            targets: vec![],
             state: ListState::default(),
         },
         Status {
@@ -67,7 +69,7 @@ fn main() -> Result<ExitCode> {
     Ok(ExitCode::from(0))
 }
 
-pub struct App {
+struct App {
     content: Content,
     status: Status,
     command: Command,
@@ -76,7 +78,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(
+    fn new(
         content: Content,
         status: Status,
         command: Command,
@@ -92,7 +94,7 @@ impl App {
         }
     }
 
-    pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stderr>>) -> io::Result<()> {
+    fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stderr>>) -> io::Result<()> {
         self.content.state.select_first();
 
         while !self.exit {
@@ -138,14 +140,47 @@ impl App {
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.content.down(),
                 KeyCode::Char('k') | KeyCode::Up => self.content.up(),
+                KeyCode::Char('/') => {
+                    self.status.mode = Mode::Command;
+                    self.command.value = "/".to_string();
+                }
+                KeyCode::Char('n') => self.content.select_next_target(),
+                KeyCode::Char('N') => self.content.select_previous_target(),
                 KeyCode::Enter => {
                     self.content.enter();
                     self.status.update_current_dir();
                     self.content.update();
                 }
+                KeyCode::Esc => {
+                    if self.content.keyword != None {
+                        self.content.clear_targets();
+                        self.command.value = "".to_string();
+                    }
+                }
                 _ => (),
             },
-            Mode::Command => self.status.mode = Mode::Normal,
+            Mode::Command => match key_event.code {
+                KeyCode::Char(c) => {
+                    let mut keyword = self.content.keyword.clone().unwrap_or("".to_string());
+                    keyword.push(c);
+                    self.content.keyword = Some(keyword);
+                    self.content
+                        .search(self.content.keyword.clone().unwrap_or("".to_string()));
+                    self.command.value = format!(
+                        "/{}",
+                        self.content.keyword.clone().unwrap_or("".to_string())
+                    );
+                }
+                KeyCode::Enter => {
+                    self.status.mode = Mode::Normal;
+                }
+                KeyCode::Esc => {
+                    self.content.clear_targets();
+                    self.command.value = "".to_string();
+                    self.status.mode = Mode::Normal;
+                }
+                _ => (),
+            },
         }
     }
 
@@ -154,8 +189,10 @@ impl App {
     }
 }
 
-pub struct Content {
+struct Content {
     value: Vec<DirEntry>,
+    keyword: Option<String>,
+    targets: Vec<usize>,
     state: ListState,
 }
 
@@ -166,32 +203,64 @@ impl Content {
             .collect::<Result<Vec<DirEntry>>>()
             .unwrap();
     }
-    fn up(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    0
-                } else {
-                    i - 1
+    fn search(&mut self, keyword: String) {
+        self.keyword = Some(keyword.clone());
+        self.targets = self
+            .value
+            .iter()
+            .enumerate()
+            .filter(|&(_, v)| {
+                v.file_name()
+                    .into_string()
+                    .unwrap()
+                    .to_lowercase()
+                    .contains(&keyword.to_lowercase())
+            })
+            .map(|(i, _)| i + 2)
+            .collect();
+    }
+    fn select_next_target(&mut self) {
+        match self.targets.len() {
+            0 => (),
+            _ => {
+                let current_selected = self.state.selected().unwrap_or(0);
+                for target in self.targets.clone() {
+                    if target > current_selected {
+                        self.state.select(Some(target));
+                        return;
+                    }
                 }
+                self.state.select(Some(self.targets[0]));
             }
-            None => 0,
-        };
-        self.state.select(Some(i));
+        }
+    }
+    fn select_previous_target(&mut self) {
+        match self.targets.len() {
+            0 => (),
+            _ => {
+                let current_selected = self.state.selected().unwrap_or(0);
+                let mut targets = self.targets.clone();
+                targets.reverse();
+                for target in &targets {
+                    if target < &current_selected {
+                        self.state.select(Some(*target));
+                        return;
+                    }
+                }
+                self.state.select(Some(targets[0]));
+            }
+        }
+    }
+    fn clear_targets(&mut self) {
+        self.targets = vec![];
+        self.keyword = None;
+    }
+    fn up(&mut self) {
+        self.state.select_previous();
         self.update();
     }
     fn down(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i >= self.value.len() + 1 {
-                    i
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        self.state.select(Some(i));
+        self.state.select_next();
         self.update();
     }
     fn enter(&mut self) {
@@ -229,13 +298,20 @@ impl Widget for &mut Content {
                         })
                         .collect::<Vec<String>>(),
                 ]
-                .concat(),
+                .concat()
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    if self.targets.contains(&i) {
+                        Text::styled(v, Style::new().bg(Color::DarkGray))
+                    } else {
+                        Text::styled(v, Style::new())
+                    }
+                })
+                .collect::<Vec<Text>>(),
             )
-            .highlight_symbol(">>")
+            .highlight_style(Style::new().fg(Color::DarkGray).bg(Color::White))
             .direction(ListDirection::TopToBottom),
-            //.style(Style::default().fg(Color::White))
-            // .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-            // .repeat_highlight_symbol(true)
             area,
             buf,
             &mut self.state,
@@ -257,7 +333,7 @@ impl fmt::Display for Mode {
     }
 }
 
-pub struct Status {
+struct Status {
     mode: Mode,
     current_dir: PathBuf,
 }
@@ -277,13 +353,16 @@ impl Widget for &Status {
         .split(area);
 
         Paragraph::new(format!(" {} ", self.mode.to_string()))
-            .style(Style::new().bg(Color::Blue))
+            .style(Style::new().fg(Color::Black).bg(match self.mode {
+                Mode::Normal => Color::Blue,
+                Mode::Command => Color::Yellow,
+            }))
             .render(areas[0], buf);
-        Paragraph::new(self.current_dir.to_str().unwrap()).render(areas[1], buf);
+        Paragraph::new(format!(" {} ", self.current_dir.to_str().unwrap())).render(areas[1], buf);
     }
 }
 
-pub struct Command {
+struct Command {
     value: String,
 }
 
@@ -292,36 +371,3 @@ impl Widget for &Command {
         Paragraph::new(self.value.clone()).render(area, buf);
     }
 }
-
-/*
-enum EntryType {
-    Dir,
-    File,
-    Symlink,
-    Socket,
-    Fifo,
-    CharDevice,
-    BlockDevice,
-    None,
-}
-
-fn what_entry_type(file_type: &FileType) -> EntryType {
-    if file_type.is_dir() {
-        EntryType::Dir
-    } else if file_type.is_file() {
-        EntryType::File
-    } else if file_type.is_symlink() {
-        EntryType::Symlink
-    } else if file_type.is_socket() {
-        EntryType::Socket
-    } else if file_type.is_fifo() {
-        EntryType::Fifo
-    } else if file_type.is_char_device() {
-        EntryType::CharDevice
-    } else if file_type.is_block_device() {
-        EntryType::BlockDevice
-    } else {
-        EntryType::None
-    }
-}
-*/
