@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
-use ratatui::text::Text;
 use ratatui::{
     backend::CrosstermBackend,
     buffer::Buffer,
@@ -17,6 +16,7 @@ use ratatui::{
     },
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
+    text::Text,
     widgets::{List, ListDirection, ListState, Paragraph, StatefulWidget, Widget},
     Frame, Terminal,
 };
@@ -172,6 +172,29 @@ impl App {
                         self.content.keyword.clone().unwrap_or("".to_string())
                     );
                 }
+                KeyCode::Backspace => match &self.content.keyword {
+                    Some(a) => match a.as_str() {
+                        "" => {
+                            self.content.clear_search();
+                            self.command.value = "".to_string();
+                            self.status.mode = Mode::Normal;
+                        }
+                        _ => {
+                            let mut keyword = a.clone();
+                            keyword.pop();
+                            self.content.search(keyword);
+                            self.command.value = format!(
+                                "/{}",
+                                self.content.keyword.clone().unwrap_or("".to_string())
+                            );
+                        }
+                    },
+                    None => {
+                        self.content.clear_search();
+                        self.command.value = "".to_string();
+                        self.status.mode = Mode::Normal;
+                    }
+                },
                 KeyCode::Enter => {
                     self.status.mode = Mode::Normal;
                 }
@@ -372,4 +395,3 @@ impl Widget for &Command {
         Paragraph::new(self.value.clone()).render(area, buf);
     }
 }
-
