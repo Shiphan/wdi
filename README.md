@@ -11,6 +11,9 @@ but for those people who are used to GUI or IDE, or you don't know what's inside
 - `k` | `Up` - go up
 - `j` | `Down` - go down
 - `Enter` - enter the directory you selected
+- `/` - enter the search mode
+- `n` - jump to next search result
+- `N` - jump to previous search result
 - `w` - quit and change directory
 - `q` - quit and not change directory
 
@@ -83,8 +86,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 ## Current Stage
 
 1. Missing some features that should be available:
-    - search
+    - some error handling
     - better ui
 2. Nice to have:
-    - support for mouse
     - custom style
