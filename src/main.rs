@@ -45,11 +45,13 @@ fn main() -> Result<ExitCode> {
             value: read_dir(env::current_dir()?)?.collect::<Result<Vec<DirEntry>>>()?,
             keyword: None,
             targets: vec![],
+            recover_point: None,
             state: ListState::default(),
         },
         Status {
             mode: Mode::Normal,
             current_dir: env::current_dir()?,
+            ruler: "1".to_string(),
         },
         Command {
             value: "".to_string(),
@@ -138,19 +140,33 @@ impl App {
                     self.exit_path = PathBuf::from_str(".").unwrap();
                     self.exit();
                 }
-                KeyCode::Char('j') | KeyCode::Down => self.content.down(),
-                KeyCode::Char('k') | KeyCode::Up => self.content.up(),
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.content.down();
+                    self.status.update_ruler(&self.content);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.content.up();
+                    self.status.update_ruler(&self.content);
+                }
                 KeyCode::Char('/') => {
                     self.status.mode = Mode::Command;
                     self.content.clear_search();
+                    self.content.set_recover_point();
                     self.command.value = "/".to_string();
                 }
-                KeyCode::Char('n') => self.content.select_next_target(),
-                KeyCode::Char('N') => self.content.select_previous_target(),
+                KeyCode::Char('n') => {
+                    self.content.select_next_target();
+                    self.status.update_ruler(&self.content);
+                }
+                KeyCode::Char('N') => {
+                    self.content.select_previous_target();
+                    self.status.update_ruler(&self.content);
+                }
                 KeyCode::Enter => {
                     self.content.enter();
                     self.status.update_current_dir();
                     self.content.update();
+                    self.status.update_ruler(&self.content);
                 }
                 KeyCode::Esc => {
                     if self.content.keyword != None {
@@ -164,13 +180,15 @@ impl App {
                 KeyCode::Char(c) => {
                     let mut keyword = self.content.keyword.clone().unwrap_or("".to_string());
                     keyword.push(c);
-                    self.content.keyword = Some(keyword);
-                    self.content
-                        .search(self.content.keyword.clone().unwrap_or("".to_string()));
+                    self.content.keyword = Some(keyword.clone());
+                    self.content.search(keyword);
+
                     self.command.value = format!(
                         "/{}",
                         self.content.keyword.clone().unwrap_or("".to_string())
                     );
+                    self.content.temporary_select_next_target();
+                    self.status.update_ruler(&self.content);
                 }
                 KeyCode::Backspace => match &self.content.keyword {
                     Some(a) => match a.as_str() {
@@ -178,21 +196,31 @@ impl App {
                             self.content.clear_search();
                             self.command.value = "".to_string();
                             self.status.mode = Mode::Normal;
+                            self.content.recover_selection();
+                            self.content.clear_recover_point();
+                            self.status.update_ruler(&self.content);
                         }
                         _ => {
                             let mut keyword = a.clone();
                             keyword.pop();
                             self.content.search(keyword);
+
                             self.command.value = format!(
                                 "/{}",
                                 self.content.keyword.clone().unwrap_or("".to_string())
                             );
+                            self.content.recover_selection();
+                            self.content.temporary_select_next_target();
+                            self.status.update_ruler(&self.content);
                         }
                     },
                     None => {
                         self.content.clear_search();
                         self.command.value = "".to_string();
                         self.status.mode = Mode::Normal;
+                        self.content.recover_selection();
+                        self.content.clear_recover_point();
+                        self.status.update_ruler(&self.content);
                     }
                 },
                 KeyCode::Enter => {
@@ -202,6 +230,9 @@ impl App {
                     self.content.clear_search();
                     self.command.value = "".to_string();
                     self.status.mode = Mode::Normal;
+                    self.content.recover_selection();
+                    self.content.clear_recover_point();
+                    self.status.update_ruler(&self.content);
                 }
                 _ => (),
             },
@@ -217,6 +248,7 @@ struct Content {
     value: Vec<DirEntry>,
     keyword: Option<String>,
     targets: Vec<usize>,
+    recover_point: Option<usize>,
     state: ListState,
 }
 
@@ -258,6 +290,37 @@ impl Content {
             }
         }
     }
+    fn set_recover_point(&mut self) {
+        self.recover_point = self.state.selected();
+    }
+    fn clear_recover_point(&mut self) {
+        self.recover_point = None;
+    }
+    fn temporary_select_next_target(&mut self) {
+        match self.targets.len() {
+            0 => self.recover_selection(),
+            _ => {
+                let point = self
+                    .recover_point
+                    .unwrap_or(self.state.selected().unwrap_or(0));
+                for &target in &self.targets {
+                    if target >= point {
+                        self.state.select(Some(target));
+                        return;
+                    }
+                }
+                self.state.select(Some(self.targets[0]));
+            }
+        }
+    }
+    fn recover_selection(&mut self) {
+        match self.recover_point {
+            Some(a) => {
+                self.state.select(Some(a));
+            }
+            None => (),
+        }
+    }
     fn select_previous_target(&mut self) {
         match self.targets.len() {
             0 => (),
@@ -265,9 +328,9 @@ impl Content {
                 let current_selected = self.state.selected().unwrap_or(0);
                 let mut targets = self.targets.clone();
                 targets.reverse();
-                for target in &targets {
-                    if target < &current_selected {
-                        self.state.select(Some(*target));
+                for &target in &targets {
+                    if target < current_selected {
+                        self.state.select(Some(target));
                         return;
                     }
                 }
@@ -281,11 +344,9 @@ impl Content {
     }
     fn up(&mut self) {
         self.state.select_previous();
-        self.update();
     }
     fn down(&mut self) {
         self.state.select_next();
-        self.update();
     }
     fn enter(&mut self) {
         match self.state.selected() {
@@ -360,29 +421,55 @@ impl fmt::Display for Mode {
 struct Status {
     mode: Mode,
     current_dir: PathBuf,
+    ruler: String,
 }
 
 impl Status {
     fn update_current_dir(&mut self) {
         self.current_dir = env::current_dir().unwrap();
     }
+    fn update_ruler(&mut self, content: &Content) {
+        let row = content.state.selected().unwrap_or(0);
+        match content.targets.len() {
+            0 => self.ruler = format!("{}", row + 1),
+            _ => {
+                self.ruler = format!(
+                    "{}/{} {}",
+                    match content.targets.iter().enumerate().find(|&(_, a)| a >= &row) {
+                        Some((i, _)) => i + 1,
+                        None => content.targets.len(),
+                    },
+                    content.targets.len(),
+                    row
+                )
+            }
+        }
+    }
 }
 
 impl Widget for &Status {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let color = match self.mode {
+            Mode::Normal => Color::Blue,
+            Mode::Command => Color::Yellow,
+        };
+
         let areas = Layout::horizontal([
             Constraint::Length((self.mode.to_string().len() + 2) as u16),
             Constraint::Fill(1),
+            Constraint::Length((self.ruler.len() + 2) as u16),
         ])
         .split(area);
 
         Paragraph::new(format!(" {} ", self.mode.to_string()))
-            .style(Style::new().fg(Color::Black).bg(match self.mode {
-                Mode::Normal => Color::Blue,
-                Mode::Command => Color::Yellow,
-            }))
+            .style(Style::new().fg(Color::Black).bg(color))
             .render(areas[0], buf);
-        Paragraph::new(format!(" {} ", self.current_dir.to_str().unwrap())).render(areas[1], buf);
+        Paragraph::new(format!(" {} ", self.current_dir.to_str().unwrap()))
+            .style(Style::new().bg(Color::DarkGray))
+            .render(areas[1], buf);
+        Paragraph::new(format!(" {} ", self.ruler))
+            .style(Style::new().fg(Color::Black).bg(color))
+            .render(areas[2], buf);
     }
 }
 
