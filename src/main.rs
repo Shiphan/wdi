@@ -22,19 +22,26 @@ use ratatui::{
 };
 
 fn main() -> Result<ExitCode> {
-    match args().len() {
-        1 => (),
+    let message: Option<String> = match args().len() {
+        1 => None,
         2 => {
-            let arg1 = args().skip(1).next().unwrap_or("".to_string());
+            let arg1 = args().skip(1).next().unwrap_or(String::from(""));
             if arg1 != "" {
-                let _ = set_current_dir(arg1);
+                match set_current_dir(&arg1) {
+                    Ok(_) => None,
+                    Err(err) => Some(format!(
+                        "Unable to change directory to `{arg1}`. (Error: {err})",
+                    )),
+                }
+            } else {
+                None
             }
         }
         _ => {
             println!("too many arguments");
             return Ok(ExitCode::from(1));
         }
-    }
+    };
 
     execute!(stderr(), EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -53,8 +60,15 @@ fn main() -> Result<ExitCode> {
             current_dir: env::current_dir()?,
             ruler: "1".to_string(),
         },
-        Command {
-            value: "".to_string(),
+        match message {
+            Some(a) => Command {
+                value: a,
+                style: Style::new().fg(Color::Red),
+            },
+            None => Command {
+                value: String::from(""),
+                style: Style::new(),
+            },
         },
         false,
         PathBuf::new(),
@@ -152,6 +166,7 @@ impl App {
                     self.status.mode = Mode::Command;
                     self.content.clear_search();
                     self.content.set_recover_point();
+                    self.command.reset();
                     self.command.value = "/".to_string();
                 }
                 KeyCode::Char('n') => {
@@ -163,14 +178,20 @@ impl App {
                     self.status.update_ruler(&self.content);
                 }
                 KeyCode::Enter => {
-                    self.content.enter();
+                    match self.content.enter() {
+                        Ok(_) => (),
+                        Err(err) => {
+                            self.command.value = format!("Error: {err}");
+                            self.command.style = Style::new().fg(Color::Red);
+                        }
+                    };
                     self.status.update_current_dir();
-                    self.content.update();
                     self.status.update_ruler(&self.content);
                 }
                 KeyCode::Esc => {
                     if self.content.keyword != None {
                         self.content.clear_search();
+                        self.command.reset();
                         self.command.value = "".to_string();
                     }
                 }
@@ -253,11 +274,9 @@ struct Content {
 }
 
 impl Content {
-    fn update(&mut self) {
-        self.value = read_dir(env::current_dir().unwrap())
-            .unwrap()
-            .collect::<Result<Vec<DirEntry>>>()
-            .unwrap();
+    fn update(&mut self) -> Result<()> {
+        self.value = read_dir(env::current_dir().unwrap())?.collect::<Result<Vec<DirEntry>>>()?;
+        Ok(())
     }
     fn search(&mut self, keyword: String) {
         self.keyword = Some(keyword.clone());
@@ -348,20 +367,27 @@ impl Content {
     fn down(&mut self) {
         self.state.select_next();
     }
-    fn enter(&mut self) {
+    fn enter(&mut self) -> Result<()> {
         match self.state.selected() {
             Some(i) => match i {
                 0 => {
-                    let _ = set_current_dir("..");
+                    set_current_dir("..")?;
+                    self.update()?;
                     self.state.select_first();
+                    Ok(())
                 }
-                1 => self.update(),
+                1 => {
+                    self.update()?;
+                    Ok(())
+                }
                 _ => {
-                    let _ = set_current_dir(self.value[i - 2].path());
+                    set_current_dir(self.value[i - 2].path())?;
+                    self.update()?;
                     self.state.select_first();
+                    Ok(())
                 }
             },
-            None => (),
+            None => Ok(()),
         }
     }
 }
@@ -475,10 +501,20 @@ impl Widget for &Status {
 
 struct Command {
     value: String,
+    style: Style,
+}
+
+impl Command {
+    fn reset(&mut self) {
+        self.value = String::from("");
+        self.style = Style::new();
+    }
 }
 
 impl Widget for &Command {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.value.clone()).render(area, buf);
+        Paragraph::new(self.value.clone())
+            .style(self.style)
+            .render(area, buf);
     }
 }
