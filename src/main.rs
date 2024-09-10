@@ -373,24 +373,18 @@ impl Content {
     }
     fn enter(&mut self) -> Result<()> {
         match self.state.selected() {
-            Some(i) => match i {
-                0 => {
-                    set_current_dir("..")?;
-                    self.update()?;
+            Some(i) => {
+                match i {
+                    0 => set_current_dir("..")?,
+                    1 => (),
+                    _ => set_current_dir(self.value[i - 2].path())?,
+                }
+                self.update()?;
+                if i != 1 {
                     self.state.select_first();
-                    Ok(())
                 }
-                1 => {
-                    self.update()?;
-                    Ok(())
-                }
-                _ => {
-                    set_current_dir(self.value[i - 2].path())?;
-                    self.update()?;
-                    self.state.select_first();
-                    Ok(())
-                }
-            },
+                Ok(())
+            }
             None => Ok(()),
         }
     }
