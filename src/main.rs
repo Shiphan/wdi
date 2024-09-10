@@ -276,6 +276,10 @@ struct Content {
 impl Content {
     fn update(&mut self) -> Result<()> {
         self.value = read_dir(env::current_dir().unwrap())?.collect::<Result<Vec<DirEntry>>>()?;
+        match self.keyword.clone() {
+            Some(keyword) => self.search(keyword),
+            None => (),
+        }
         Ok(())
     }
     fn search(&mut self, keyword: String) {
