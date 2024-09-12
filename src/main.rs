@@ -22,26 +22,27 @@ use ratatui::{
 };
 
 fn main() -> Result<ExitCode> {
-    let message: Option<String> = match args().len() {
+    let command = match args().len() {
         1 => None,
-        2 => {
-            let arg1 = args().skip(1).next().unwrap_or(String::from(""));
-            if arg1 != "" {
-                match set_current_dir(&arg1) {
-                    Ok(_) => None,
-                    Err(err) => Some(format!(
-                        "Unable to change directory to `{arg1}`. (Error: {err})",
-                    )),
-                }
-            } else {
-                None
-            }
-        }
+        2 => match args().skip(1).next() {
+            Some(arg1) => match set_current_dir(&arg1) {
+                Ok(_) => None,
+                Err(err) => Some(Command {
+                    value: format!("Unable to change directory to `{arg1}`. (Error: {err})"),
+                    style: Style::new().fg(Color::Red),
+                }),
+            },
+            None => None,
+        },
         _ => {
             println!("too many arguments");
             return Ok(ExitCode::from(1));
         }
-    };
+    }
+    .unwrap_or(Command {
+        value: String::from(""),
+        style: Style::new(),
+    });
 
     execute!(stderr(), EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -60,16 +61,7 @@ fn main() -> Result<ExitCode> {
             current_dir: env::current_dir()?,
             ruler: "1".to_string(),
         },
-        match message {
-            Some(a) => Command {
-                value: a,
-                style: Style::new().fg(Color::Red),
-            },
-            None => Command {
-                value: String::from(""),
-                style: Style::new(),
-            },
-        },
+        command,
         false,
         PathBuf::new(),
     );
